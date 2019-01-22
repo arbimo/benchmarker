@@ -10,6 +10,7 @@ object bench extends ScalaModule {
     ivy"com.lihaoyi::os-lib:0.2.2",
     ivy"com.lihaoyi::upickle:0.7.1",
     ivy"org.typelevel::cats-effect:1.0.0",
-    ivy"com.github.alexarchambault::case-app:2.0.0-M5"
+    ivy"com.github.alexarchambault::case-app:2.0.0-M5",
+    ivy"tech.sparse::toml-scala:0.2.0"
   )
 }
