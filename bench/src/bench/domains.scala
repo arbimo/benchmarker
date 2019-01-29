@@ -1,9 +1,10 @@
+package bench
 
+
+import bench.Properties.MSS
 import os.Path
 import upickle.default._
-import implicits._
-import Properties._
-import toml.Codec
+import bench.implicits._
 
 case class Properties(top: MSS, subs: Map[String, MSS]) {
   override def toString: String = {
@@ -61,13 +62,13 @@ case class ProblemId(domain: DomainVariant, pbId: String) {
 object ProblemId {
   implicit val rw: ReadWriter[ProblemId] = macroRW
 }
-case class Instance(problemId: ProblemId, properties: Map[String, String] = Map()) {
-  def kind: String = ???
-  def wd: Path = ???
-}
-object Instance {
-  implicit val rw: ReadWriter[Instance] = macroRW
-}
+//case class Instance(problemId: ProblemId, properties: Map[String, String] = Map()) {
+//  def kind: String = ???
+//  def wd: Path = ???
+//}
+//object Instance {
+//  implicit val rw: ReadWriter[Instance] = macroRW
+//}
 
 
 object FileMatcher {

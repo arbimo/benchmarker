@@ -1,86 +1,13 @@
-import cats.Functor
+package bench
+
 import os.{Path, RelPath}
-import toml.Value.{Str, Tbl}
-import toml.{Codec, Value}
-//
-//sealed trait Val {
-//  def map(f: String => String): Val
-//  def makeAbs(dir: Path): Val = this
-//}
-//case class Str(str: String) extends Val {
-//  require(!str.startsWith("/") && !str.startsWith("./"))
-//
-//  override def map(f: String => String): Val = Str(f(str))
-//}
-//case class RelFile(str: String) extends Val {
-//  require(str.startsWith("./"))
-//  override def makeAbs(dir: Path): AbsFile = AbsFile((dir / RelPath(str)).toString)
-//
-//  override def map(f: String => String): Val = RelFile(f(str))
-//}
-//case class AbsFile(str: String) extends Val {
-//  require(str.startsWith("/"))
-//  override def map(f: String => String): Val = AbsFile(f(str))
-//}
-//case class Lst(l: List[Val]) extends Val {
-//  override def map(f: String => String): Val = Lst(l.map(_.map(f)))
-//  override def makeAbs(dir: Path): Val = Lst(l.map(_.makeAbs(dir)))
-//}
-//
-//case class Props(kv: Map[String, Val]) extends Val {
-//
-//  private def asPF: PartialFunction[String, String] = new PartialFunction[String,String] {
-//    override def isDefinedAt(x: String): Boolean = kv.get(x) match {
-//      case Some(Str(s)) => true
-//      case _ => false
-//    }
-//
-//    override def apply(x: String): String = kv.get(x) match {
-//      case Some(Str(s)) => s
-//      case _ => ???
-//    }
-//  }
-//
-//  def add(key: String, value: Val): Props = {
-//    val v2 = value.map(Props.bind(_, this.asPF))
-//    val m2 = kv.mapValues(v => v.map(Props.bind(_, Props(Map(key -> v2)).asPF)))
-//    Props(m2.updated(key, v2))
-//  }
-//
-//  def makeAbsolute(dir: Path): Props = {
-//    Props(      kv.mapValues(_.makeAbs(dir))    )
-//  }
-//
-//  override def map(f: String => String): Val = Props(kv.mapValues(_.map(f)))
-//}
-//object Props {
-//  def bind(str: String, map: PartialFunction[String, String], partial: Boolean = true): String = {
-//    val split = str.split("[{}]")
-//    val sb = new StringBuilder()
-//    for(i <- split.indices) {
-//      if(i %2 == 0) {
-//        // not a pattern
-//        sb.append(split(i))
-//      } else {
-//        val key = split(i)
-//        if(map.isDefinedAt(key)) {
-//          sb.append(map(key))
-//        } else if(partial) {
-//          sb.append(s"{$key}")
-//        } else {
-//          sys.error(s"Key '$key' is missing from binds: $map")
-//        }
-//
-//
-//      }
-//    }
-//    sb.toString()
-//  }
-//}
+import toml.Value
+import toml.Value.{Arr, Str, Tbl}
 
 case class Props(m: Tbl) {
   def apply(k: String) = Conf.read(m, k)
   def add(k: String, v: String) = Props(Conf.add(m)(k, v).asInstanceOf[Tbl])
+  def makeAbs(dir: os.Path): Props = Props(Conf.makeAbs(m)(dir).asInstanceOf[Tbl])
 
   def toMap: Map[String,String] = m.values.mapValues(Props.str(_))
 }
@@ -90,6 +17,7 @@ object Props {
 
   def str(v: toml.Value): String = v match {
     case Str(s) => s
+    case Arr(l) => l.map(str(_)).mkString("{", ":", "}")
     case _ => ???
   }
 

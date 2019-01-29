@@ -1,29 +1,31 @@
-import os.Path
-import upickle.default._
+package bench
 
-import scala.util.matching._
-import Pickler._
-import caseapp.ExtraName
+
+
+import caseapp._
 import caseapp.core.app.CaseApp
-import cats._
-import cats.implicits._
 import cats.effect._
 import cats.effect.concurrent.Semaphore
+import cats.implicits._
+import os.Path
 
 import scala.concurrent.duration._
-import implicits._
+
+import bench.implicits._
 
 case class Params(
                  @ExtraName("d")
-                   domains: List[String] = List("rovers_ipc5", "blocks_ipc2"),
-                   planners: List[String] = List("optic"),
+                   domains: List[String] = List(),
+                   planners: List[String] = List("optic", "fape"),
                    timeout: Duration = 40.seconds,
                    domainsDirectory: Path = os.pwd / "domains",
-                   baseDir: Path = os.pwd / "cache",
+                   baseDir: Path = os.pwd ,
                    parallelExecutions: Int = 3,
-                   memoryLimit: Int = 2000
+                   memoryLimit: Int = 2000,
+                 dryRun: Boolean = true,
+                 force: Boolean = false
                  ) {
-  def cache = baseDir / "cache"
+  def cache = baseDir / "out"
 }
 
 
@@ -64,7 +66,7 @@ object Main extends IOApp {
   }
 
   override def run(args: List[String]): IO[ExitCode] = {
-    implicit val params =
+    implicit val params: bench.Params =
       CaseApp.parse[Params](args)  match {
         case Right((p, _)) => p
         case Left(err) =>
@@ -75,16 +77,20 @@ object Main extends IOApp {
 
     val xx = os.walk(params.domainsDirectory).filter(_.last == "domain.toml")
     println(xx)
-    val domains = xx.toList.flatMap { p =>
+    val allDomains = xx.toList.flatMap { p =>
       val str = os.read(p)
       val dir = p / os.up
       Conf.parse(p)
     }
-    domains.foreach(d => {
-      val x = instances(d)
-      println(d)
-      println(s"instances: ${x.mkString(", ")}")
-    })
+    val domains =
+      if(params.domains.isEmpty) allDomains
+      else allDomains.filter(v => params.domains.contains(v.domain.name))
+
+//    targetDomains.foreach(d => {
+//      val x = instances(d)
+//      println(d)
+//      println(s"instances: ${x.mkString(", ")}")
+//    })
 
     val solvers = params.planners.map(Solvers(_))
     val runs =
@@ -100,7 +106,7 @@ object Main extends IOApp {
 
     for {
       sem <- Semaphore.apply[IO](params.parallelExecutions)
-      res <- runs.toList.map(_.eval(sem = sem)).parSequence
+      res <- runs.toList.map(_.eval(useCache = !params.force, sem = sem)).parSequence
 
     } yield {
       Stats.print(res)

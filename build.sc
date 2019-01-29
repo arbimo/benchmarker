@@ -13,4 +13,6 @@ object bench extends ScalaModule {
     ivy"com.github.alexarchambault::case-app:2.0.0-M5",
     ivy"tech.sparse::toml-scala:0.2.0"
   )
+
+  override def mainClass = Some("bench.Main")
 }

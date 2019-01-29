@@ -1,5 +1,8 @@
+package bench
+
 
 import SolveStatus.{Memout, SAT, Timeout, UNSAT, Unknown}
+import Stats.SolverConf
 import cats._
 import cats.implicits._
 import cats.effect.IO
@@ -16,7 +19,7 @@ object Pickler {
 import Pickler._
 
 
-case class RunLog(summary: Path, output: Path)
+case class RunLog(workDir: os.Path)
 
 
 
@@ -24,7 +27,7 @@ case class RunLog(summary: Path, output: Path)
 
 sealed trait SolveStatus {
   def solved = this match {
-    case SolveStatus.Unknown => ???
+    case SolveStatus.Unknown => false
     case SolveStatus.SAT => true
     case SolveStatus.UNSAT => true
     case SolveStatus.Timeout => false
@@ -42,10 +45,16 @@ object SolveStatus {
 }
 
 
+case class Instance(domain: String, problem: String) {
+  override def toString: String = s"$domain/$problem"
+}
 
-
-case class RunResult(pb: ProblemId, solver: String, status: SolveStatus, time: Duration) {
+case class RunResult(pb: ProblemId, solver: String, status: SolveStatus, time: Duration, cost: Option[Double]) {
   override def toString: String = s"$solver\t${pb.domain}\t${pb.pbId}\t$status\t$time"
+
+  def solverConf: SolverConf = SolverConf(solver, pb.domain.variantName)
+  def domain: String = pb.domain.domain.name
+  def instance: Instance = Instance(domain, pb.pbId)
 }
 object RunResult {
    implicit val rw: ReadWriter[RunResult] = macroRW
@@ -70,8 +79,8 @@ case class Run(solver: ISolver, problemId: ProblemId) {
     val target = persistentFile
     if(os.exists(target)) {
       read[RunResult](os.read(target)) match {
-        case RunResult(_, _, Unknown, _) => None
-        case RunResult(_, _, Timeout, t) if t < p.timeout => None
+        case RunResult(_, _, Unknown, _, _) => None
+        case RunResult(_, _, Timeout, t, _) if t < p.timeout => None
         case x if x.time > p.timeout =>
           Some(x.copy(status = Timeout, time = p.timeout))
         case x => Some(x)
@@ -96,9 +105,13 @@ case class Run(solver: ISolver, problemId: ProblemId) {
         case None =>
           for {
             _ <- sem.acquire
-            log <- solver.runner(problemId)
+            _ <-
+              if(p.dryRun) IO.unit
+              else solver.runner(problemId)
             _ <- sem.release
-            res <- solver.extract(problemId, log)
+            res <- solver.extract(problemId).recover {
+              case _ => RunResult(problemId, solver.id, Unknown, Duration.Inf, None)
+            }
             _ <- if(persist) cacheResult(res) else IO.unit
           } yield res
 //          solver.runner(instance)

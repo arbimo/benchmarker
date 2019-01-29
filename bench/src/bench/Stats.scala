@@ -1,3 +1,5 @@
+package bench
+
 import SolveStatus.{Memout, SAT, Timeout, UNSAT, Unknown}
 
 import scala.concurrent.duration.Duration
@@ -17,8 +19,8 @@ object instances {
 }
 
 object Symbols {
-  val SAT = "✓"
-  val UNSAT = "✗"
+  val SAT = "SAT"
+  val UNSAT = "UNSAT"
   val infty = "∞"
   val ko = "-"
 }
@@ -63,14 +65,14 @@ sealed trait Aggregate[A, K1, K2, V] {
 object Stats {
   type Solver = String
 
-  object SolvedPerDomain extends Aggregate[RunResult, Solver, DomainVariant, Int] {
-    override def firstKey(a: RunResult): Solver = a.solver
-    override def secondKey(a: RunResult): DomainVariant = a.pb.domain
+  object SolvedPerDomain extends Aggregate[RunResult, SolverConf, Domain, Int] {
+    override def firstKey(a: RunResult): SolverConf = a.solverConf
+    override def secondKey(a: RunResult): Domain = a.pb.domain.domain
     override def agg(vs: Iterable[RunResult]): Int = vs.count(_.status.solved)
   }
-  object Solved extends Aggregate[RunResult, Solver, ProblemId, String] {
-    override def firstKey(a: RunResult): Solver = a.solver
-    override def secondKey(a: RunResult) = a.pb
+  object Solved extends Aggregate[RunResult, SolverConf, Instance, String] {
+    override def firstKey(a: RunResult) = a.solverConf
+    override def secondKey(a: RunResult) = a.instance
     override def agg(vs: Iterable[RunResult]): String = vs.toSeq match {
       case Seq(a) => a.status match {
         case SAT => Symbols.SAT
@@ -82,12 +84,23 @@ object Stats {
       case _ => ???
     }
   }
-  object Runtime extends Aggregate[RunResult, Solver, ProblemId, Duration] {
-    override def firstKey(a: RunResult): Solver = a.solver
-    override def secondKey(a: RunResult) = a.pb
+  object Runtime extends Aggregate[RunResult, SolverConf, Instance, Duration] {
+    override def firstKey(a: RunResult): SolverConf = a.solverConf
+    override def secondKey(a: RunResult) = a.instance
     override def agg(vs: Iterable[RunResult]): Duration = vs.toSeq match {
       case Seq(a) if a.status.solved => a.time
       case Seq(a) => Duration.Inf
+      case _ => ???
+    }
+  }
+  object Costs extends Aggregate[RunResult, SolverConf, Instance, Double] {
+    override def firstKey(a: RunResult): SolverConf = a.solverConf
+    override def secondKey(a: RunResult) = a.instance
+    override def agg(vs: Iterable[RunResult]): Double = vs.toSeq match {
+      case Seq(a) => a.cost match {
+        case Some(x) => x
+        case None => Double.NaN
+      }
       case _ => ???
     }
   }
@@ -97,7 +110,6 @@ object Stats {
 
     val keys1 = common.map(agg.firstKey).toSeq.distinct.sortBy(_.toString)
     val keys2 = common.map(agg.secondKey).toSeq.distinct.sortBy(_.toString)
-
     val tab =
 
       ("" +: keys1) +:
@@ -108,13 +120,19 @@ object Stats {
     })
     Tabulator.format(tab)
   }
+  case class SolverConf(s: Solver, probVariant: String) {
+    override def toString: Solver = s"$s / $probVariant"
+  }
 
   def commonRuns(runs: Iterable[RunResult]) = {
-    val problemsByPlanner = runs.groupBy(_.solver).mapValues(rs => rs.map(_.pb).toSet)
+    val problemsByPlanner =
+      runs
+        .groupBy(_.solverConf)
+        .mapValues(rs => rs.map(_.instance).toSet)
     val commonProblems =
-      runs.map(_.pb).toSet.filter(pb => problemsByPlanner.values.forall(_.contains(pb)))
+      runs.map(_.instance).toSet.filter(pb => problemsByPlanner.values.forall(_.contains(pb)))
 
-    val sharedRuns = runs.filter(r => commonProblems.contains(r.pb))
+    val sharedRuns = runs.filter(r => commonProblems.contains(r.instance))
 
     sharedRuns
   }
@@ -127,6 +145,7 @@ object Stats {
 
     println(tabView(com, Solved))
     println(tabView(com, Runtime))
+    println(tabView(com, Costs))
     println(tabView(com, SolvedPerDomain))
   }
 

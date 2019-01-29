@@ -1,3 +1,5 @@
+package bench
+
 
 import SolveStatus.{Memout, SAT, Timeout, UNSAT, Unknown}
 import cats._
@@ -9,8 +11,11 @@ import scala.concurrent.duration._
 
 
 object Solvers {
-  def apply(name: String): ISolver = name match {
-    case "optic" => OPTIC
+
+  val all = List(OPTIC, FAPE)
+
+  def apply(name: String): ISolver = all.find(_.id == name) match {
+    case Some(solver) => solver
     case _ => throw new Exception(s"Unknown solver: $name")
   }
 }
@@ -22,7 +27,7 @@ trait ISolver {
 
   def runner(instance: ProblemId)(implicit p: Params): IO[RunLog]
 
-  def extract(instance: ProblemId, log: RunLog)(implicit p: Params): IO[RunResult]
+  def extract(instance: ProblemId)(implicit p: Params): IO[RunResult]
 
   def workDir(i: ProblemId)(implicit p: Params): Path =
     p.cache / id / i.domain.domain.name / i.domain.variantName / i.pbId
@@ -38,13 +43,15 @@ trait ISolver {
 //      os.copy(wd / f, workDir(instance) / f, replaceExisting = true, copyAttributes = true, createFolders = true)
   }
 
-  def binders(instance: ProblemId)(implicit p: Params) =
+  def binders(instance: ProblemId)(implicit p: Params): Props =
     instance.domain.props
-      .add("log-file", "log")
-        .add("summary-file", "summary")
-        .add("TIMEOUT", p.timeout.toSeconds.toString)
-        .add("memory-limit", p.memoryLimit.toString)
-        .add("PB", instance.pbId)
+      .add("log-file", "./log")
+      .add("summary-file", "./summary")
+      .add("plan-file", "./plan")
+      .add("TIMEOUT", p.timeout.toSeconds.toString)
+      .add("memory-limit", p.memoryLimit.toString)
+      .add("PB", instance.pbId)
+      .makeAbs(workDir(instance))
 //    Map[String,String](
 //    "log-file" -> "log",
 //    "summary-file" -> "summary",
@@ -63,7 +70,7 @@ object OPTIC extends ISolver {
   override def accepts(i: DomainVariant): Boolean = i.props("lang") == "pddl"
 
   val template = "runsolver -W {TIMEOUT} --vsize-limit {memory-limit} -v {summary-file} -o {log-file} " +
-    "/home/arthur/work/ext/optic/release/optic/optic-clp -N {domain-file} {problem-file}"
+    "optic-clp -N {domain-file} {problem-file}"
 
   override def runner(instance: ProblemId)(implicit p: Params): IO[RunLog] = {
     val props = binders(instance)
@@ -80,16 +87,17 @@ object OPTIC extends ISolver {
           check = false
         )
     }
-    val logs = IO.pure(RunLog(wd / props("summary-file"), wd / props("log-file")))
+    val logs = IO.pure(RunLog(wd))
     setupWorkDir(instance) *>
       run *> logs
   }
 
-  override def extract(instance: ProblemId, log: RunLog)(implicit p: Params): IO[RunResult] = {
+  override def extract(instance: ProblemId)(implicit p: Params): IO[RunResult] = {
+    val props = binders(instance)
 
 
     def readProperties(p: Path): IO[Map[String,String]] = IO {
-      os.read.lines.stream(log.summary).fold(Map[String,String]()){
+      os.read.lines.stream(p).fold(Map[String,String]()){
         case (acc, l) if l.startsWith("#") => acc
         case (acc, l) =>
           l.split("=") match {
@@ -99,22 +107,36 @@ object OPTIC extends ISolver {
       }
     }
 
+    val costPrefix = "; Cost: "
+
     for {
-      props <- readProperties(log.summary)
+      summary <- readProperties(Path(props("summary-file")))
       status <- IO {
-        if(props("TIMEOUT") == "true")
+        if(summary("TIMEOUT") == "true")
           Timeout
-        else if(props("MEMOUT") == "true")
+        else if(summary("MEMOUT") == "true")
           Memout
         else
-          os.read.lines.stream(log.output).fold[SolveStatus](Unknown) {
+          os.read.lines.stream(Path(props("log-file"))).fold[SolveStatus](Unknown) {
             case (Unknown, l) if l.contains("Problem unsolvable") => UNSAT
             case (Unknown, l) if l.contains("Solution Found") => SAT
             case (prev, _) => prev
           }
       }
-      time = props("WCTIME").toDouble.seconds
-    } yield RunResult(instance, id, status, time)
+      cost <- IO {
+        os.read.lines.stream(Path(props("log-file"))).fold[Option[Double]](None) {
+          case (prev, l) if l.startsWith(costPrefix) =>
+            val newCost = l.replaceFirst(costPrefix, "").trim.toDouble
+            prev match {
+              case Some(c) if c < newCost => Some(c)
+              case _ => Some(newCost)
+            }
+          case (prev, _) => prev
+        }
+      }.recover { case _ => None }
+      time = summary("WCTIME").toDouble.seconds
+    } yield RunResult(instance, id, status, time, cost)
+
 
 
 
@@ -129,7 +151,8 @@ object FAPE extends ISolver {
 
 //  val template = "runsolver -W {TIMEOUT} --vsize-limit {memory-limit} -v {summary-file} -o {log-file} " +
 //    "/home/arthur/work/ext/optic/release/optic/optic-clp -N {domain-file} {problem-file}"
-  val template = "ng-nailgun fr.laas.fape.planning.Planning"
+//  val template = "ng-nailgun fr.laas.fape.planning.Planning"
+  val template = "runsolver -v {summary-file} -o {log-file} fape -t {TIMEOUT} {problem-file} --write-plan {plan-file}"
 
   override def runner(instance: ProblemId)(implicit p: Params): IO[RunLog] = {
     val props = binders(instance)
@@ -138,6 +161,7 @@ object FAPE extends ISolver {
 
     val run = IO {
       println(s"Running $command")
+      os.makeDir.all(wd)
       os
         .proc(command.split(" "))
         .call(
@@ -145,16 +169,22 @@ object FAPE extends ISolver {
           check = false
         )
     }
-    val logs = IO.pure(RunLog(wd / props("summary-file"), wd / props("log-file")))
+    val logs = IO.pure(RunLog(wd))
     setupWorkDir(instance) *>
       run *> logs
   }
 
-  override def extract(instance: ProblemId, log: RunLog)(implicit p: Params): IO[RunResult] = {
+  override def extract(instance: ProblemId)(implicit p: Params): IO[RunResult] = {
+    val wd = workDir(instance)
+    val props = binders(instance)
 
+//    IO {
+//      val solved = os.exists(wd / props("plan"))
+//      val runtime =
+//    }
 
     def readProperties(p: Path): IO[Map[String,String]] = IO {
-      os.read.lines.stream(log.summary).fold(Map[String,String]()){
+      os.read.lines.stream(p).fold(Map[String,String]()){
         case (acc, l) if l.startsWith("#") => acc
         case (acc, l) =>
           l.split("=") match {
@@ -165,21 +195,14 @@ object FAPE extends ISolver {
     }
 
     for {
-      props <- readProperties(log.summary)
       status <- IO {
-        if(props("TIMEOUT") == "true")
-          Timeout
-        else if(props("MEMOUT") == "true")
-          Memout
-        else
-          os.read.lines.stream(log.output).fold[SolveStatus](Unknown) {
-            case (Unknown, l) if l.contains("Problem unsolvable") => UNSAT
-            case (Unknown, l) if l.contains("Solution Found") => SAT
-            case (prev, _) => prev
-          }
+        if(os.exists(Path(props("plan-file")))) SAT
+        else if(!os.read(Path(props("log-file"))).contains("strategy")) Unknown
+        else Timeout
       }
+      props <- readProperties(Path(props("summary-file")))
       time = props("WCTIME").toDouble.seconds
-    } yield RunResult(instance, id, status, time)
+    } yield RunResult(instance, id, status, time, None)
 
 
 
