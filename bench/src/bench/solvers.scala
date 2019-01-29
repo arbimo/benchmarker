@@ -20,6 +20,10 @@ object Solvers {
 }
 
 trait ISolver {
+
+  def maxConcurrentRuns: Int = 1
+  lazy val semaphore = scalaz.zio.Semaphore(maxConcurrentRuns)
+
   def id: String
   def accepts(i: DomainVariant): Boolean
 
@@ -31,8 +35,7 @@ trait ISolver {
     p.cache / id / i.domain.domain.name / i.domain.variantName / i.pbId
 
   def setupWorkDir(instance: ProblemId)(implicit p: Params) = IO.succeedLazy {
-    val wd = instance.domain.domain.directory
-    os.makeDir.all(wd)
+    os.makeDir.all(workDir(instance))
   }
 
   def binders(instance: ProblemId)(implicit p: Params): Props =
@@ -67,7 +70,6 @@ object OPTIC extends ISolver {
     for {
       _ <- scalaz.zio.console.putStrLn(s"Running $command")
       _ <- setupWorkDir(instance)
-      _ <- IO.succeedLazy { os.makeDir.all(wd) }
       _ <- IO.syncException {
         os.proc(command.split(" "))
           .call(
@@ -140,9 +142,6 @@ object FAPE extends ISolver {
 
   override def accepts(i: DomainVariant): Boolean = i.props("lang") == "anml"
 
-//  val template = "runsolver -W {TIMEOUT} --vsize-limit {memory-limit} -v {summary-file} -o {log-file} " +
-//    "/home/arthur/work/ext/optic/release/optic/optic-clp -N {domain-file} {problem-file}"
-//  val template = "ng-nailgun fr.laas.fape.planning.Planning"
   val template =
     "runsolver -v {summary-file} -o {log-file} fape -t {TIMEOUT} {problem-file} --write-plan {plan-file}"
 
@@ -155,7 +154,6 @@ object FAPE extends ISolver {
     for {
       _ <- scalaz.zio.console.putStrLn(s"Running $command")
       _ <- setupWorkDir(instance)
-      _ <- IO.succeedLazy { os.makeDir.all(wd) }
       _ <- IO.syncException {
         os.proc(command.split(" "))
           .call(
@@ -163,6 +161,7 @@ object FAPE extends ISolver {
             check = false
           )
       }
+      // check if the log file match what we expect
       _ <- nio.existsAndContains(Path(props("log-file")), "strategy").flatMap {
         case true => IO.unit
         case false =>
@@ -176,11 +175,6 @@ object FAPE extends ISolver {
       implicit p: Params): IO[Exception, RunResult] = {
     val wd = workDir(instance)
     val props = binders(instance)
-
-//    IO {
-//      val solved = os.exists(wd / props("plan"))
-//      val runtime =
-//    }
 
     def readProperties(p: Path): IO[Exception, Map[String, String]] =
       IO.syncException {
@@ -202,9 +196,14 @@ object FAPE extends ISolver {
           case false => Unknown
         }
       }
+      cost <- nio.read(Path(props("log-file")))
+        .map(content => content.lines.find(_.startsWith("Makespan: ")) match {
+        case Some(l) => Some(l.replaceFirst("Makespan:", "").trim.toDouble -1)
+        case None => None
+      })
       props <- readProperties(Path(props("summary-file")))
       time = props("WCTIME").toDouble.seconds
-    } yield RunResult(instance, id, status, time, None)
+    } yield RunResult(instance, id, status, time, cost)
 
   }
 }

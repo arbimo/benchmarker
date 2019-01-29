@@ -24,7 +24,8 @@ case class Params(
     parallelExecutions: Int = 3,
     memoryLimit: Int = 2000,
     dryRun: Boolean = true,
-    force: Boolean = false
+    force: Boolean = false,
+    failFast: Boolean = false
 ) {
   def cache = baseDir / "out"
 }
