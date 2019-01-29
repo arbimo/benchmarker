@@ -5,6 +5,8 @@ import SolveStatus.{Memout, SAT, Timeout, UNSAT, Unknown}
 import scala.concurrent.duration.Duration
 import cats._
 import cats.implicits._
+import scalaz.zio._
+import scalaz.zio.console._
 
 object instances {
 
@@ -139,14 +141,16 @@ object Stats {
 
 
 
-  def print(runs: Iterable[RunResult]) = {
+  def print(runs: Iterable[RunResult]): IO[Nothing, Unit] = {
     val com = commonRuns(runs).toSet
 
+    for {
+      _ <- putStrLn(tabView(com, Solved))
+      _ <- putStrLn(tabView(com, Runtime))
+      _ <- putStrLn(tabView(com, Costs))
+      _ <-putStrLn(tabView(com, SolvedPerDomain))
+    } yield ()
 
-    println(tabView(com, Solved))
-    println(tabView(com, Runtime))
-    println(tabView(com, Costs))
-    println(tabView(com, SolvedPerDomain))
   }
 
 

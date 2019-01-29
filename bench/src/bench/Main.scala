@@ -1,11 +1,12 @@
 package bench
 
-
+import scalaz.zio._
+import scalaz.zio.console._
+import scalaz.zio.interop.catz._
 
 import caseapp._
 import caseapp.core.app.CaseApp
-import cats.effect._
-import cats.effect.concurrent.Semaphore
+
 import cats.implicits._
 import os.Path
 
@@ -14,40 +15,42 @@ import scala.concurrent.duration._
 import bench.implicits._
 
 case class Params(
-                 @ExtraName("d")
-                   domains: List[String] = List(),
-                   planners: List[String] = List("optic", "fape"),
-                   timeout: Duration = 40.seconds,
-                   domainsDirectory: Path = os.pwd / "domains",
-                   baseDir: Path = os.pwd ,
-                   parallelExecutions: Int = 3,
-                   memoryLimit: Int = 2000,
-                 dryRun: Boolean = true,
-                 force: Boolean = false
-                 ) {
+    @ExtraName("d")
+    domains: List[String] = List(),
+    planners: List[String] = List("optic", "fape"),
+    timeout: Duration = 40.seconds,
+    domainsDirectory: Path = os.pwd / "domains",
+    baseDir: Path = os.pwd,
+    parallelExecutions: Int = 3,
+    memoryLimit: Int = 2000,
+    dryRun: Boolean = true,
+    force: Boolean = false
+) {
   def cache = baseDir / "out"
 }
 
-
 object Pattern {
 
-  def bind(str: String, map: Map[String, String], partial: Boolean = true): String = {
+  def bind(
+      str: String,
+      map: Map[String, String],
+      partial: Boolean = true
+  ): String = {
     val split = str.split("[{}]")
     val sb = new StringBuilder()
-    for(i <- split.indices) {
-      if(i %2 == 0) {
+    for (i <- split.indices) {
+      if (i % 2 == 0) {
         // not a pattern
         sb.append(split(i))
       } else {
         val key = split(i)
-        if(map.contains(key)) {
+        if (map.contains(key)) {
           sb.append(map(key))
-        } else if(partial) {
+        } else if (partial) {
           sb.append(s"{$key}")
         } else {
           sys.error(s"Key '$key' is missing from binds: $map")
         }
-
 
       }
     }
@@ -56,62 +59,66 @@ object Pattern {
 
 }
 
-
-object Main extends IOApp {
-
-
+object Main extends scalaz.zio.App {
 
   def instances(dv: DomainVariant) = {
-    FileMatcher.findFilesMatching(dv.domain.directory, dv.props("problem-file"), "PB")
+    FileMatcher.findFilesMatching(
+      dv.domain.directory,
+      dv.props("problem-file"),
+      "PB"
+    )
   }
 
-  override def run(args: List[String]): IO[ExitCode] = {
+  override def run(args: List[String]): IO[Nothing, ExitStatus] = {
     implicit val params: bench.Params =
-      CaseApp.parse[Params](args)  match {
+      CaseApp.parse[Params](args) match {
         case Right((p, _)) => p
         case Left(err) =>
-          return IO.delay(println(err.message)) *>
-            IO.delay(println(CaseApp.helpMessage[Params])) *>
-            IO.pure(ExitCode.Error)
+          return for {
+            _ <- putStrLn(err.message)
+            _ <- putStrLn(CaseApp.helpMessage[Params])
+          } yield ExitStatus.ExitNow(1)
       }
 
-    val xx = os.walk(params.domainsDirectory).filter(_.last == "domain.toml")
-    println(xx)
-    val allDomains = xx.toList.flatMap { p =>
-      val str = os.read(p)
-      val dir = p / os.up
-      Conf.parse(p)
-    }
-    val domains =
-      if(params.domains.isEmpty) allDomains
-      else allDomains.filter(v => params.domains.contains(v.domain.name))
-
-//    targetDomains.foreach(d => {
-//      val x = instances(d)
-//      println(d)
-//      println(s"instances: ${x.mkString(", ")}")
-//    })
+    // val xx = os.walk(params.domainsDirectory).filter(_.last == "domain.toml")
+    val domsIO = for {
+      files <- nio.walk(params.domainsDirectory, skip = _.last == ".git")
+      confFiles = files.filter(_.last == "domain.toml").toList
+      _ <- putStrLn(confFiles.mkString("\n"))
+      allDomains <- IO.collectAllPar(confFiles.map(Conf.parse))
+      _ <- putStrLn(allDomains.toString)
+      domains = if (params.domains.isEmpty)
+        allDomains.flatten
+      else
+        allDomains.flatten.filter(v => params.domains.contains(v.domain.name))
+    } yield domains
 
     val solvers = params.planners.map(Solvers(_))
-    val runs =
+
+    val runsIO: IO[String, List[Run]] = domsIO.map(domains => {
       for {
         solver <- solvers
         dom <- domains
         if solver.accepts(dom)
         pb <- instances(dom)
-      } yield {
-        val id = ProblemId(dom, pb)
-        Run(solver, id)
-      }
+        id = ProblemId(dom, pb)
+      } yield Run(solver, id)
+    })
 
-    for {
-      sem <- Semaphore.apply[IO](params.parallelExecutions)
-      res <- runs.toList.map(_.eval(useCache = !params.force, sem = sem)).parSequence
-
+    val program: IO[String, ExitStatus] = for {
+      sem <- Semaphore(params.parallelExecutions)
+      runs <- runsIO
+      evals = runs
+        .map(_.eval(useCache = !params.force, sem = sem).leftMap(_.toString))
+      res <- IO.collectAllPar(evals)
+      _ <- Stats.print(res)
     } yield {
-      Stats.print(res)
-
-      ExitCode.Success
+      ExitStatus.ExitNow(0)
     }
+    program.redeem(msg =>
+                     putStrLn(s"error: $msg")
+                       .map(_ => ExitStatus.ExitNow(1)),
+                   x => IO.succeed(x))
+
   }
 }

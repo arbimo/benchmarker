@@ -1,8 +1,13 @@
 package bench
 
+import java.io.IOException
+
+import scalaz.zio._
 import os.{Path, RelPath}
 import toml.Value
 import toml.Value.{Arr, Str, Tbl}
+
+import scala.util.Try
 
 case class Props(m: Tbl) {
   def apply(k: String) = Conf.read(m, k)
@@ -28,7 +33,7 @@ object Props {
 }
 
 
-object Conf extends App {
+object Conf  {
 
 
     val conf = """
@@ -100,34 +105,26 @@ problem-file="./anml-part-hier/{DOM}-hier.{PB}.pb.anml"
     case _ => ???
   }
 
-  def parse(f: Path): Seq[DomainVariant] = {
-    val str = os.read(f)
+  def parse(f: Path): IO[String, List[DomainVariant]] = {
     val dir = f / os.up
-    toml.Toml.parse(str) match {
-      case Left(err) =>
-        sys.error(s"Failed to parse $f: $err")
-      case Right(v) =>
+
+    nio.read(f)
+      .leftMap(ioError => ioError.toString)
+      .map(str => toml.Toml.parse(str))
+      .flatMap {
+        case Left(err) => IO.fail(s"Failed to parse $f: $err")
+        case Right(v) => IO.succeed(v)
+      }.map(v => {
         val v2 = makeAbs(v)(dir)
         val v3 = bindAll(v2)
         flatten(v3.asInstanceOf[Tbl]).map {
           case (k, v: Tbl) =>
             val dom = Domain(read(v, "DOM"), dir, Props.empty)
             DomainVariant(dom, variantName = k, Props(v))
-        }.toSeq
-    }
+        }.toList
+    })
   }
 
-  val x = toml.Toml.parse(conf).getOrElse(???)
-
-  println(x)
-  val a = makeAbs(x)(Path("/root/"))
-  val b = bindAll(a)
-  val c = flatten(b.asInstanceOf[Tbl])
-
-  println(a)
-  println(b)
-
-  c.foreach(println)
 
 
 }
