@@ -67,7 +67,7 @@ object Main extends scalaz.zio.App {
       dv.domain.directory,
       dv.props("problem-file"),
       "PB"
-    )
+    ).filterNot(_.endsWith("_ck")) // for tpp instances
   }
 
   override def run(args: List[String]): IO[Nothing, ExitStatus] = {

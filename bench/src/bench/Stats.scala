@@ -83,7 +83,7 @@ object Stats {
         case Memout => "MO"
         case Unknown => "??"
       }
-      case _ => ???
+      case Seq() => "-"
     }
   }
   object Runtime extends Aggregate[RunResult, SolverConf, Instance, Duration] {
@@ -92,7 +92,7 @@ object Stats {
     override def agg(vs: Iterable[RunResult]): Duration = vs.toSeq match {
       case Seq(a) if a.status.solved => a.time
       case Seq(a) => Duration.Inf
-      case _ => ???
+      case Seq() => Duration.Undefined
     }
   }
   object Costs extends Aggregate[RunResult, SolverConf, Instance, Double] {
@@ -103,7 +103,7 @@ object Stats {
         case Some(x) => x
         case None => Double.NaN
       }
-      case _ => ???
+      case Seq() => Double.NaN
     }
   }
 
@@ -129,7 +129,7 @@ object Stats {
   def commonRuns(runs: Iterable[RunResult]) = {
     val problemsByPlanner =
       runs
-        .groupBy(_.solverConf)
+        .groupBy(_.solver)
         .mapValues(rs => rs.map(_.instance).toSet)
     val commonProblems =
       runs.map(_.instance).toSet.filter(pb => problemsByPlanner.values.forall(_.contains(pb)))
